@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Command;
 
+use clap::Parser;
 use gtk::gdk;
 use gtk::prelude::GestureExt;
 use hyprland::event_listener::EventListener;
@@ -11,6 +13,7 @@ use relm4::prelude::{AsyncComponent, AsyncComponentParts};
 use gtk::{Window, prelude::WidgetExt};
 use gtk_layer_shell::{Edge, Layer, LayerShell};
 use relm4::RelmApp;
+use xdg::BaseDirectories;
 
 #[derive(Debug)]
 enum AppMsg {
@@ -21,7 +24,7 @@ enum AppMsg {
 
 struct AppModel {
     visible: bool,
-    layers: HashMap<&'static str, &'static str>,
+    layers: HashMap<String, String>,
 }
 
 #[relm4::component(async)]
@@ -30,7 +33,7 @@ impl AsyncComponent for AppModel {
     type Output = ();
     type CommandOutput = ();
 
-    type Init = HashMap<&'static str, &'static str>;
+    type Init = HashMap<String, String>;
 
     view! {
         Window {
@@ -64,7 +67,7 @@ impl AsyncComponent for AppModel {
         {
             let sender = sender.clone();
 
-            gesture.connect_pressed(move |gesture, _, _, _| {
+            gesture.connect_released(move |gesture, _, _, _| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
                 sender.input(AppMsg::Hide);
             });
@@ -94,21 +97,10 @@ impl AsyncComponent for AppModel {
         AsyncComponentParts { model, widgets }
     }
 
-    async fn update_with_view(
-        &mut self,
-        widgets: &mut Self::Widgets,
-        message: Self::Input,
-        sender: AsyncComponentSender<Self>,
-        root: &Self::Root,
-    ) {
-        self.update(message, sender.clone(), root).await;
-        self.update_view(widgets, sender);
-    }
-
     async fn update(
         &mut self,
         message: Self::Input,
-        sender: AsyncComponentSender<Self>,
+        _: AsyncComponentSender<Self>,
         _: &Self::Root,
     ) {
         match message {
@@ -148,18 +140,44 @@ impl AsyncComponent for AppModel {
     }
 }
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    #[arg(short = 'C', long, default_value = "#1F1F1F3F")]
+    color: String,
+}
+
 fn main() {
-    let layers = maplit::hashmap! {
-        "audio" => "ags -t audio",
-        "jogger" => "jogger --toggle",
-        "players" => "ags -t players",
-        "sidebar" => "ags -t sidebar",
+    let args = Args::parse();
+    let layers = match args.config {
+        None => {
+            let base_dirs = BaseDirectories::new();
+            let path = base_dirs.place_config_file("closer-layer.toml").unwrap();
+            if std::fs::exists(&path).unwrap() {
+                let layers = std::fs::read_to_string(path).unwrap();
+                toml::from_str::<HashMap<String, String>>(&layers).unwrap()
+            } else {
+                std::fs::File::create(path).unwrap();
+                HashMap::new()
+            }
+        }
+        Some(path) => {
+            if std::fs::exists(&path).unwrap() {
+                let layers = std::fs::read_to_string(path).unwrap();
+                toml::from_str::<HashMap<String, String>>(&layers).unwrap()
+            } else {
+                HashMap::new()
+            }
+        }
     };
+
     let app = RelmApp::new("com.psyvern.closer");
 
     // The CSS "magic" happens here.
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(include_str!("../style.css"));
+    let css = format!("window {{ background-color: {}; }}", args.color);
+    provider.load_from_string(&css);
     // We give the CssProvided to the default screen so the CSS rules we added
     // can be applied to our window.
     gtk::style_context_add_provider_for_display(
@@ -168,6 +186,5 @@ fn main() {
         gtk::STYLE_PROVIDER_PRIORITY_USER,
     );
 
-    app.run_async::<AppModel>(layers);
-    // app.run::<AppModel>(layers);
+    app.with_args(Vec::new()).run_async::<AppModel>(layers);
 }
