@@ -5,6 +5,7 @@ use std::process::Command;
 use clap::Parser;
 use gtk::gdk;
 use gtk::prelude::GestureExt;
+use hyprland::data::Layers;
 use hyprland::event_listener::EventListener;
 use hyprland::shared::HyprData;
 use relm4::AsyncComponentSender;
@@ -58,10 +59,14 @@ impl AsyncComponent for AppModel {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let model = AppModel {
-            visible: false,
-            layers,
-        };
+        let visible = Layers::get()
+            .unwrap()
+            .into_iter()
+            .flat_map(|(_, x)| x)
+            .flat_map(|(_, x)| x)
+            .any(|x| layers.contains_key(&x.namespace));
+
+        let model = AppModel { visible, layers };
 
         let gesture = gtk::GestureClick::new();
         {
@@ -105,10 +110,10 @@ impl AsyncComponent for AppModel {
     ) {
         match message {
             AppMsg::Hide => {
-                for (_, x) in hyprland::data::Layers::get().unwrap() {
+                for (_, x) in Layers::get().unwrap() {
                     for (_, x) in x {
                         for x in x {
-                            if let Some(command) = self.layers.get(x.namespace.as_str()) {
+                            if let Some(command) = self.layers.get(&x.namespace) {
                                 let _ = Command::new("sh").arg("-c").arg(command).output();
                             }
                         }
@@ -118,22 +123,21 @@ impl AsyncComponent for AppModel {
                 self.visible = false;
             }
             AppMsg::OpenLayer(layer) => {
-                if self.layers.contains_key(layer.as_str()) {
+                if self.layers.contains_key(&layer) {
                     self.visible = true;
                 }
             }
             AppMsg::CloseLayer(layer) => {
-                for (_, x) in hyprland::data::Layers::get().unwrap() {
+                for (_, x) in Layers::get().unwrap() {
                     for (_, x) in x {
                         for x in x {
-                            if self.layers.contains_key(x.namespace.as_str())
-                                && x.namespace != layer
-                            {
+                            if x.namespace != layer && self.layers.contains_key(&x.namespace) {
                                 return;
                             }
                         }
                     }
                 }
+
                 self.visible = false;
             }
         }
